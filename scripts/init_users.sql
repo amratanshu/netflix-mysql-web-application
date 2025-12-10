@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS AA_USERS (
     user_id INT AUTO_INCREMENT PRIMARY KEY,
     email VARCHAR(100) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    role ENUM('ADMIN', 'EMPLOYEE', 'VIEWER') NOT NULL,
+    role ENUM('ADMIN', 'PRODUCER', 'VIEWER') NOT NULL,
     
     -- Foreign Keys to link to specific entity tables
     -- Only one of these should be set (or neither for pure Admins)

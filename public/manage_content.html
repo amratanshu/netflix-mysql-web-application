@@ -192,28 +192,52 @@
             document.getElementById('addSeriesForm').classList.toggle('hidden');
         }
 
+        // Auth Check
+        const user = JSON.parse(localStorage.getItem('user'));
+        if (!user || user.role === 'VIEWER') { // Producers allowed
+            window.location.href = 'index.html';
+        }
+
+        // Hide sidebar link if Producer
+        if (user.role === 'PRODUCER') {
+            const link = document.querySelector('a[href="manage_users.html"]');
+            if (link) link.style.display = 'none';
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            localStorage.removeItem('user');
+            window.location.href = 'index.html';
+        });
+
+        const headers = {
+            'Content-Type': 'application/json',
+            'x-user-id': user.id
+        };
+        // For GET requests, we only need x-user-id, but passing Content-Type generally ok or we separate.
+        const getHeaders = { 'x-user-id': user.id };
+
         // 1. Load Reference Data (Genres, Languages, Countries, ProdHouses)
         async function loadRefData() {
             // Prod Houses
-            const phRes = await fetch(`${API_BASE}/production-houses`);
+            const phRes = await fetch(`${API_BASE}/production-houses`, { headers: getHeaders });
             const phList = await phRes.json();
             const phSelect = document.getElementById('prodHouseId');
             phList.forEach(p => phSelect.innerHTML += `<option value="${p.production_house_id}">${p.ph_name}</option>`);
 
             // Languages
-            const langRes = await fetch(`${API_BASE}/languages`);
+            const langRes = await fetch(`${API_BASE}/languages`, { headers: getHeaders });
             const langList = await langRes.json();
             const langSelect = document.getElementById('origLangId');
             langList.forEach(l => langSelect.innerHTML += `<option value="${l.language_id}">${l.language_name}</option>`);
 
             // Genres
-            const genreRes = await fetch(`${API_BASE}/genres`);
+            const genreRes = await fetch(`${API_BASE}/genres`, { headers: getHeaders });
             const genreList = await genreRes.json();
             const genreSelect = document.getElementById('genreIds');
             genreList.forEach(g => genreSelect.innerHTML += `<option value="${g.genre_id}">${g.genre_name}</option>`);
 
             // Countries
-            const countryRes = await fetch(`${API_BASE}/countries`);
+            const countryRes = await fetch(`${API_BASE}/countries`, { headers: getHeaders });
             const countryList = await countryRes.json();
             const countrySelect = document.getElementById('countryIds');
             countryList.forEach(c => countrySelect.innerHTML += `<option value="${c.country_id}">${c.country_name}</option>`);
@@ -221,22 +245,40 @@
 
         // 2. Load Series
         async function loadSeries() {
-            const res = await fetch(`${API_BASE}/series`);
+            const res = await fetch(`${API_BASE}/series`, { headers: getHeaders });
             const seriesList = await res.json();
 
             const tbody = document.getElementById('seriesTableBody');
             tbody.innerHTML = '';
 
             seriesList.forEach(s => {
+                // Filter for Producer in UI if not filtered by Backend (Backend sends all but we might want to hide irrelevant?)
+                // Actually Backend might return all. But "Producer... retain control over one PH".
+                // If I am producer, I should visually only manage my own.
+                // But let's rely on Backend rejecting edits.
+                // Or: if Producer, visual check.
+                let canEdit = true;
+                if (user.role === 'PRODUCER' && s.production_house_id !== user.producerId) {
+                    canEdit = false;
+                }
+
                 const tr = document.createElement('tr');
                 tr.className = 'hover:bg-gray-700 cursor-pointer transition';
+
+                let deleteBtn = '';
+                if (canEdit) {
+                    deleteBtn = `<button onclick="deleteSeries(${s.webseries_id}, event)" class="text-red-500 hover:text-red-400 text-xs font-bold">DEL</button>`;
+                } else {
+                    deleteBtn = `<span class="text-gray-600 text-xs">Read-Only</span>`;
+                }
+
                 tr.innerHTML = `
                     <td class="p-3 font-medium text-white">${s.series_name}</td>
                     <td class="p-3 text-xs text-gray-400">
                         ${s.ph_name} • ${new Date(s.release_date).getFullYear()}
                     </td>
                     <td class="p-3">
-                        <button onclick="deleteSeries(${s.webseries_id}, event)" class="text-red-500 hover:text-red-400 text-xs font-bold">DEL</button>
+                        ${deleteBtn}
                     </td>
                 `;
                 tr.onclick = () => selectSeries(s.webseries_id, s.series_name);
@@ -265,7 +307,7 @@
 
             const res = await fetch(`${API_BASE}/series/full`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: headers,
                 body: JSON.stringify(data)
             });
 
@@ -275,7 +317,8 @@
                 toggleForm();
                 loadSeries();
             } else {
-                alert('Error creating series');
+                const err = await res.json();
+                alert('Error: ' + (err.error || 'Failed'));
             }
         });
 
@@ -285,7 +328,7 @@
             document.getElementById('addEpisodeFormPanel').classList.remove('hidden');
             document.getElementById('epWebseriesId').value = seriesId;
 
-            const res = await fetch(`${API_BASE}/series/${seriesId}/episodes`);
+            const res = await fetch(`${API_BASE}/series/${seriesId}/episodes`, { headers: getHeaders });
             const episodes = await res.json();
             const list = document.getElementById('episodesList');
             list.innerHTML = '';
@@ -316,25 +359,39 @@
                 episode_title: document.getElementById('epTitle').value,
                 duration_min: document.getElementById('epDuration').value
             };
-            await fetch(`${API_BASE}/episodes`, {
+            const res = await fetch(`${API_BASE}/episodes`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: headers,
                 body: JSON.stringify(data)
             });
-            showAdminToast(); // <-- CRUD Toast
-            document.getElementById('epNum').value = '';
-            document.getElementById('epTitle').value = '';
-            document.getElementById('epDuration').value = '';
-            selectSeries(webseriesId, document.getElementById('selectedSeriesTitle').innerText);
+
+            if (res.ok) {
+                showAdminToast(); // <-- CRUD Toast
+                document.getElementById('epNum').value = '';
+                document.getElementById('epTitle').value = '';
+                document.getElementById('epDuration').value = '';
+                selectSeries(webseriesId, document.getElementById('selectedSeriesTitle').innerText);
+            } else {
+                const err = await res.json();
+                alert('Error: ' + (err.error || 'Failed'));
+            }
         });
 
         // 6. Delete Series (Existing Logic)
         async function deleteSeries(id, event) {
             event.stopPropagation();
             if (!confirm('Are you sure? This will delete all episodes too.')) return;
-            await fetch(`${API_BASE}/series/${id}`, { method: 'DELETE' });
-            showAdminToast(); // <-- CRUD Toast
-            loadSeries();
+            const res = await fetch(`${API_BASE}/series/${id}`, {
+                method: 'DELETE',
+                headers: headers
+            });
+            if (res.ok) {
+                showAdminToast(); // <-- CRUD Toast
+                loadSeries();
+            } else {
+                const err = await res.json();
+                alert('Error: ' + (err.error || 'Delete Failed'));
+            }
         }
 
         // Auth Logic

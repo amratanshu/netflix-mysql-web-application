@@ -142,10 +142,12 @@
             window.location.href = 'index.html';
         });
 
+        const headers = { 'x-user-id': user.id };
+
         // 2. Load Viewers
         async function loadViewers() {
             try {
-                const res = await fetch(`${API_BASE}/viewers`);
+                const res = await fetch(`${API_BASE}/viewers`, { headers });
                 const viewers = await res.json();
 
                 const tbody = document.getElementById('usersTableBody');
@@ -208,8 +210,13 @@
             noMsg.classList.remove('hidden'); // default show
 
             try {
-                const res = await fetch(`${API_BASE}/viewers/${accountId}/history`);
+                const res = await fetch(`${API_BASE}/viewers/${accountId}/history`, { headers });
                 const history = await res.json();
+
+                if (history.error) {
+                    alert(history.error);
+                    return;
+                }
 
                 if (history.length > 0) {
                     noMsg.classList.add('hidden');

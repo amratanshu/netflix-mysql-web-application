@@ -74,9 +74,22 @@
     <script>
         // 1. Auth Check
         const user = JSON.parse(localStorage.getItem('user'));
-        if (!user || user.role === 'VIEWER') {
+        if (!user) {
             window.location.href = 'index.html';
         }
+
+        // Role Access
+        // Viewers go to browse
+        if (user.role === 'VIEWER') {
+            window.location.href = 'browse.html';
+        }
+
+        // Sidebar Logic: Hide Manage Viewers for Producers
+        if (user.role === 'PRODUCER') {
+            const mgUserLink = document.querySelector('a[href="manage_users.html"]');
+            if (mgUserLink) mgUserLink.style.display = 'none';
+        }
+
         document.getElementById('userEmail').innerText = user.email;
         document.getElementById('logoutBtn').addEventListener('click', () => {
             localStorage.removeItem('user');
@@ -86,12 +99,14 @@
         // 2. Fetch Data & Render Charts
         async function loadCharts() {
             try {
+                const headers = { 'x-user-id': user.id };
+
                 // Fetch Top Series
-                const res1 = await fetch('/api/analytics/top-series');
+                const res1 = await fetch('/api/analytics/top-series', { headers });
                 const topSeriesData = await res1.json();
 
                 // Fetch Genres
-                const res2 = await fetch('/api/analytics/genre-distribution');
+                const res2 = await fetch('/api/analytics/genre-distribution', { headers });
                 const genreData = await res2.json();
 
                 // Render Bar Chart

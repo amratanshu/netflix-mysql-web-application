@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Netflix - Browse</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-black text-white font-sans">
+    <nav class="flex justify-between items-center px-10 py-6 bg-transparent fixed w-full z-50 gradient-bg">
+        <h1 class="text-red-600 text-3xl font-bold uppercase cursor-pointer"
+            onclick="window.location.href='browse.html'">NEWS</h1>
+        <div class="flex items-center space-x-4">
+            <span id="userEmail" class="text-sm text-gray-300"></span>
+            <button id="logoutBtn"
+                class="bg-red-600 px-4 py-2 rounded text-white font-bold hover:bg-red-700 transition">Sign Out</button>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <header class="relative h-[60vh] flex items-center justify-center bg-cover bg-center"
+        style="background-image: url('https://assets.nflxext.com/ffe/siteui/vlv3/dace47b4-a5cb-4368-80fe-c26f3e77d540/f5b52435-458f-498f-9d1d-ccd4f1af9913/US-en-20231023-popsignuptwoweeks-perspective_alpha_website_large.jpg');">
+        <div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black opacity-90"></div>
+        <div class="z-10 text-center max-w-2xl px-4">
+            <h1 class="text-5xl font-bold mb-4 drop-shadow-lg">Unlimited movies, TV shows, and more</h1>
+            <p class="text-xl mb-6 drop-shadow-md">Watch anywhere. Cancel anytime.</p>
+        </div>
+    </header>
+
+    <main class="px-10 py-8 -mt-20 relative z-20">
+        <h2 class="text-2xl font-bold mb-4">Trending Now</h2>
+        <div id="contentGrid" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            <!-- Content Cards -->
+        </div>
+
+        <h2 class="text-2xl font-bold mb-4 mt-12">My History</h2>
+        <div id="historyGrid" class="text-gray-400">
+            <!-- History List -->
+            Loading history...
+        </div>
+    </main>
+
+    <!-- Watch Confirmation Modal -->
+    <div id="watchModal" class="hidden fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4">
+        <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full border border-gray-700 shadow-2xl relative">
+            <button onclick="closeWatchModal()"
+                class="absolute top-4 right-4 text-gray-400 hover:text-white text-2xl">×</button>
+
+            <h3 class="text-xl font-bold mb-2 text-white" id="modalSeriesTitle">Series Title</h3>
+
+            <div id="modalContent" class="mb-6 text-gray-300">
+                <!-- Injected: Episode Info or "No Episodes" -->
+            </div>
+
+            <div class="flex justify-end space-x-3">
+                <button onclick="closeWatchModal()" class="px-4 py-2 text-gray-400 hover:text-white">Cancel</button>
+                <button id="confirmWatchBtn" onclick="confirmWatch()"
+                    class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded font-bold hidden">
+                    Watch Now
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast"
+        class="fixed bottom-4 right-4 bg-green-600 text-white px-6 py-3 rounded shadow-lg transform translate-y-20 opacity-0 transition duration-500 z-50 pointer-events-none">
+        Added to View History!
+    </div>
+
+    <script>
+        const user = JSON.parse(localStorage.getItem('user'));
+        const headers = { 'Content-Type': 'application/json', 'x-user-id': user ? user.id : '' };
+        let selectedEpisodeId = null;
+
+        if (!user) {
+            window.location.href = 'index.html';
+        }
+
+        // Strict Access Control: Only Viewers can browse/watch
+        if (user.role !== 'VIEWER') {
+            // If Admin/Producer tries to access browse, send them back to their dashboard
+            if (user.role === 'ADMIN' || user.role === 'PRODUCER') {
+                window.location.href = 'admin_dashboard.html';
+            } else {
+                window.location.href = 'index.html';
+            }
+        }
+
+        document.getElementById('userEmail').innerText = user.email;
+
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            localStorage.removeItem('user');
+            window.location.href = 'index.html';
+        });
+
+        // Open Modal Logic
+        async function openWatchModal(seriesId, title) {
+            document.getElementById('watchModal').classList.remove('hidden');
+            document.getElementById('modalSeriesTitle').innerText = title;
+            const contentDiv = document.getElementById('modalContent');
+            const confirmBtn = document.getElementById('confirmWatchBtn');
+
+            contentDiv.innerHTML = 'Checking available episodes...';
+            confirmBtn.classList.add('hidden');
+            selectedEpisodeId = null;
+
+            try {
+                // Fetch Episodes
+                const res = await fetch(`/api/series/${seriesId}/episodes`, { headers });
+                const episodes = await res.json();
+
+                if (episodes.length > 0) {
+                    const firstEp = episodes[0]; // Assuming watching start -> end
+                    selectedEpisodeId = firstEp.episode_id;
+                    contentDiv.innerHTML = `
+                        <p class="mb-2">Are you sure you want to watch this series?</p>
+                        <div class="bg-gray-900 p-3 rounded border border-gray-700">
+                            <span class="text-red-500 font-bold text-xs uppercase">Up Next</span>
+                            <div class="font-bold text-lg">${firstEp.episode_title}</div>
+                            <div class="text-sm text-gray-500">Episode ${firstEp.episode_number} • ${firstEp.duration_min} min</div>
+                        </div>
+                    `;
+                    confirmBtn.classList.remove('hidden');
+                } else {
+                    contentDiv.innerHTML = `<p class="text-yellow-500">No episodes available for this series yet.</p>`;
+                }
+
+            } catch (err) {
+                console.error(err);
+                contentDiv.innerText = "Error loading episodes.";
+            }
+        }
+
+        function closeWatchModal() {
+            document.getElementById('watchModal').classList.add('hidden');
+        }
+
+        // Confirm Watch Logic
+        async function confirmWatch() {
+            if (!selectedEpisodeId) return;
+
+            try {
+                const res = await fetch('/api/view', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        account_id: user.accountId,
+                        episode_id: selectedEpisodeId
+                    })
+                });
+
+                if (res.ok) {
+                    closeWatchModal();
+                    showToast();
+                    loadContent(); // Refresh history
+                } else {
+                    alert("Failed to record view.");
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function showToast() {
+            const toast = document.getElementById('toast');
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 3000);
+        }
+
+        async function loadContent() {
+            try {
+                // 1. Fetch Browse Content
+                const res = await fetch('/api/browse', { headers });
+                const series = await res.json();
+
+                const grid = document.getElementById('contentGrid');
+                grid.innerHTML = series.map(s => `
+                    <div onclick="openWatchModal(${s.webseries_id}, '${s.series_name.replace(/'/g, "\\'")}')" 
+                         class="bg-gray-800 rounded overflow-hidden hover:scale-105 transition transform cursor-pointer group relative">
+                        <div class="h-40 bg-black flex items-center justify-center text-gray-500 bg-contain bg-center bg-no-repeat" style="background-image: url('https://upload.wikimedia.org/wikipedia/commons/7/75/Netflix_icon.svg'); background-size: 50%;">
+                           <div class="bg-black bg-opacity-50 p-2 rounded hidden group-hover:block text-white">▶ Play</div>
+                        </div>
+                        <div class="p-3">
+                            <h3 class="font-bold text-sm truncate text-white">${s.series_name}</h3>
+                            <p class="text-xs text-gray-400">${s.release_date.split('T')[0]}</p>
+                            <p class="text-xs text-gray-500 mt-1 truncate">${s.genres || 'Unknown Genre'}</p>
+                        </div>
+                    </div>
+                `).join('');
+
+                // 2. Fetch History (if Viewer)
+                if (user.role === 'VIEWER') {
+                    const histRes = await fetch(`/api/viewers/${user.accountId}/history`, { headers });
+
+                    const histDiv = document.getElementById('historyGrid');
+
+                    if (!histRes.ok) {
+                        const err = await histRes.json();
+                        histDiv.innerHTML = `<p class="text-red-500">Error loading history: ${err.error || 'Server Error'}</p>`;
+                        return;
+                    }
+
+                    const history = await histRes.json();
+                    console.log('History Data:', history); // Debug Log
+                    if (history.length === 0) {
+                        histDiv.innerHTML = `<p class="text-gray-500 italic">You haven't watched anything yet.</p>`;
+                    } else {
+                        histDiv.innerHTML = `
+                            <div class="overflow-x-auto bg-gray-900 rounded-lg shadow-inner border border-gray-800">
+                                <table class="w-full text-left text-sm text-gray-400">
+                                    <thead class="bg-gray-800 text-gray-200 uppercase text-xs">
+                                        <tr>
+                                            <th class="p-4">Date</th>
+                                            <th class="p-4">Series</th>
+                                            <th class="p-4">Episode</th>
+                                            <th class="p-4">Duration</th>
+                                            <th class="p-4 w-10"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-800">
+                                        ${history.map(h => `
+                                            <tr class="hover:bg-gray-800 transition group">
+                                                <td class="p-4 whitespace-nowrap">${new Date(h.view_timestamp).toLocaleDateString()} ${new Date(h.view_timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                                                <td class="p-4 text-white font-medium">${h.series_name}</td>
+                                                <td class="p-4">${h.episode_title}</td>
+                                                <td class="p-4">${h.duration_min} min</td>
+                                                <td class="p-4 text-right">
+                                                    <button onclick="deleteHistory(${h.view_id}, event)" class="text-red-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition" title="Delete from History">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                        </svg>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        `;
+                    }
+                } else {
+                    document.getElementById('historyGrid').innerText = 'History available for Viewers.';
+                }
+
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function deleteHistory(viewId, event) {
+            console.log('Deleting viewId:', viewId);
+            if (event) event.stopPropagation();
+            if (!confirm('Remove this title from your history?')) return;
+
+            try {
+                const res = await fetch(`/api/viewers/${user.accountId}/history/${viewId}`, {
+                    method: 'DELETE',
+                    headers: headers
+                });
+
+                if (res.ok) {
+                    console.log('Delete success');
+                    loadContent(); // Refresh
+                } else {
+                    const err = await res.json();
+                    console.error('Delete failed:', err);
+                    alert('Failed to delete: ' + (err.error || 'Server Error'));
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        loadContent();
+    </script>
+</body>
+
+</html>

@@ -133,27 +133,71 @@
             pendingRenew = null;
         }
 
+        // Auth Check
+        const user = JSON.parse(localStorage.getItem('user'));
+        if (!user || user.role === 'VIEWER') { // Producers allowed? Yes
+            window.location.href = 'index.html';
+        }
+
+        // Sidebar Logic: Hide Manage Viewers for Producers
+        if (user.role === 'PRODUCER') {
+            const link = document.querySelector('a[href="manage_users.html"]');
+            if (link) link.style.display = 'none';
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            localStorage.removeItem('user');
+            window.location.href = 'index.html';
+        });
+
+        const headers = {
+            'Content-Type': 'application/json',
+            'x-user-id': user.id
+        };
+        const getHeaders = { 'x-user-id': user.id };
+
         // 1. Load Contracts
         async function loadContracts() {
-            const res = await fetch(`${API_BASE}/contracts`);
+            const res = await fetch(`${API_BASE}/contracts`, { headers: getHeaders });
             const contracts = await res.json();
 
             const tbody = document.getElementById('contractsTableBody');
             tbody.innerHTML = '';
 
+            // Should Producer see all? Backend filters for Producer.
+            // If Backend error (Access Denied), handle it.
+            if (contracts.error) {
+                tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-red-500">${contracts.error}</td></tr>`;
+                return;
+            }
+
             contracts.forEach(c => {
                 const date = new Date(c.contract_date).toLocaleDateString();
                 const tr = document.createElement('tr');
+
+                let actionBtn = '';
+                // Only Admin can renew? Logic in server allows both or checks.
+                // UI: Let's hide Renew for Producer anyway as it's typically Admin initiated OR 
+                // if Producer wants to "request renewal" that's different.
+                // "The contract is renewed... Netflix charges PH". So Netflix (Admin) renews it.
+                if (user.role === 'ADMIN') {
+                    actionBtn = `
+                        <button onclick="openRenewModal(${c.webseries_id}, '${c.series_name.replace(/'/g, "\\'")}', ${c.charge_per_episode})" 
+                                class="bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded text-xs">
+                            Renew
+                        </button>
+                     `;
+                } else {
+                    actionBtn = `<span class="text-xs text-gray-500">Locked</span>`;
+                }
+
                 tr.innerHTML = `
                     <td class="p-3 font-medium text-white">${c.series_name}</td>
                     <td class="p-3 text-xs">${c.ph_name}</td>
                     <td class="p-3 text-xs">${date}</td>
                     <td class="p-3 text-green-400">$${c.charge_per_episode}</td>
                     <td class="p-3">
-                        <button onclick="openRenewModal(${c.webseries_id}, '${c.series_name.replace(/'/g, "\\'")}', ${c.charge_per_episode})" 
-                                class="bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded text-xs">
-                            Renew
-                        </button>
+                        ${actionBtn}
                     </td>
                 `;
                 tbody.appendChild(tr);
@@ -162,7 +206,7 @@
 
         // 2. Load Production Houses
         async function loadPH() {
-            const res = await fetch(`${API_BASE}/production-houses`);
+            const res = await fetch(`${API_BASE}/production-houses`, { headers: getHeaders });
             const houses = await res.json();
             const ul = document.getElementById('phList');
 
@@ -181,7 +225,7 @@
             try {
                 const res = await fetch(`${API_BASE}/contracts/renew`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: headers,
                     body: JSON.stringify({ webseries_id: pendingRenew.id, old_charge: pendingRenew.rate })
                 });
                 const data = await res.json();
@@ -193,11 +237,8 @@
             }
         }
 
-        // Auth Logic
-        document.getElementById('logoutBtn').addEventListener('click', () => {
-            localStorage.removeItem('user');
-            window.location.href = 'index.html';
-        });
+        // Auth Logic Removed from bottom as it's now at top
+        // document.getElementById('logoutBtn').addEventListener ... (Done above)
 
         loadContracts();
         loadPH();

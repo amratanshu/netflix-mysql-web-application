@@ -17,21 +17,21 @@ async function seedUsers() {
         const password = 'password123';
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // 1. Create Super Admin
-        console.log('Creating Admin User...');
+        // 1. Create Super Admin (Employee)
+        console.log('Creating Admin User (Employee)...');
         await connection.execute(`
             INSERT INTO AA_USERS (email, password_hash, role, account_id, producer_id)
             VALUES (?, ?, 'ADMIN', NULL, NULL)
         `, ['admin@netflix.com', hashedPassword]);
 
-        // 2. Create Employee (Linked to Producer ID 1 - Shawn Levy)
-        console.log('Creating Employee User (Shawn Levy)...');
+        // 2. Create Producer User (Linked to Producer ID 1 - Shawn Levy)
+        console.log('Creating Producer User (Shawn Levy)...');
         await connection.execute(`
             INSERT INTO AA_USERS (email, password_hash, role, account_id, producer_id)
-            VALUES (?, ?, 'EMPLOYEE', NULL, 1)
+            VALUES (?, ?, 'PRODUCER', NULL, 1)
         `, ['shawn.levy@21laps.com', hashedPassword]);
 
-        // 3. Create Viewer (Linked to Account ID 1 - John Doe)
+        // 3. Create Viewer User (Linked to Account ID 1 - John Doe)
         console.log('Creating Viewer User (John Doe)...');
         await connection.execute(`
              INSERT INTO AA_USERS (email, password_hash, role, account_id, producer_id)
@@ -52,4 +52,8 @@ async function seedUsers() {
     }
 }
 
-seedUsers();
+if (require.main === module) {
+    seedUsers();
+}
+
+module.exports = { seedUsers };

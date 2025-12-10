@@ -105,15 +105,13 @@
 
                 if (response.ok) {
                     // Login Success
-                    const role = data.user.role;
+                    localStorage.setItem('user', JSON.stringify(data.user));
 
-                    if (role === 'ADMIN' || role === 'EMPLOYEE') {
-                        localStorage.setItem('user', JSON.stringify(data.user));
+                    if (data.user.role === 'ADMIN' || data.user.role === 'PRODUCER' || data.user.role === 'EMPLOYEE') {
                         window.location.href = 'admin_dashboard.html';
                     } else {
-                        // Viewers are not allowed in the Management App
-                        errorDiv.innerText = 'Access Restricted: This portal is for Administrators only.';
-                        errorDiv.classList.remove('hidden');
+                        // Viewer
+                        window.location.href = 'browse.html';
                     }
                 } else {
                     // Login Failed
