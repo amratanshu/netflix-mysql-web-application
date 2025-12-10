@@ -46,96 +46,188 @@ app.get('/api/health', (req, res) => {
 });
 
 const bcrypt = require('bcrypt');
+const xss = require('xss');
+
+// --- XSS PREVENTION ---
+
+/**
+ * Sanitize user input to prevent XSS attacks
+ * Converts potentially malicious HTML/JavaScript into safe text
+ * 
+ * @param {Object} obj - Object containing user input fields
+ * @returns {Object} Sanitized object with all string values cleaned
+ */
+function sanitizeInput(obj) {
+    if (!obj || typeof obj !== 'object') return obj;
+
+    const sanitized = {};
+    for (let key in obj) {
+        if (typeof obj[key] === 'string') {
+            // Clean the string using xss library
+            sanitized[key] = xss(obj[key]);
+        } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+            // Recursively sanitize nested objects
+            sanitized[key] = sanitizeInput(obj[key]);
+        } else {
+            // Keep non-string values as-is (numbers, booleans, etc.)
+            sanitized[key] = obj[key];
+        }
+    }
+    return sanitized;
+}
+
+// --- TRANSACTION UTILITIES FOR CONCURRENCY CONTROL ---
+
+/**
+ * Execute a database operation with transaction retry logic
+ * Handles deadlocks automatically by retrying up to maxRetries times
+ * 
+ * @param {Function} operation - Async function that receives a connection and performs DB operations
+ * @param {string} isolationLevel - Transaction isolation level (default: REPEATABLE READ)
+ * @param {number} maxRetries - Maximum number of retry attempts for deadlocks (default: 3)
+ * @returns {Promise} Result of the operation
+ */
+async function executeWithTransaction(operation, isolationLevel = 'REPEATABLE READ', maxRetries = 3) {
+    let retries = maxRetries;
+    let lastError;
+
+    while (retries > 0) {
+        const connection = await pool.getConnection();
+
+        try {
+            // Set isolation level for this transaction
+            await connection.query(`SET TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
+
+            // Begin transaction
+            await connection.beginTransaction();
+
+            // Execute the operation
+            const result = await operation(connection);
+
+            // Commit transaction
+            await connection.commit();
+
+            return result;
+
+        } catch (err) {
+            // Rollback on any error
+            await connection.rollback();
+
+            // Check if it's a deadlock error
+            if (err.code === 'ER_LOCK_DEADLOCK' && retries > 1) {
+                console.log(`⚠️ Deadlock detected, retrying... (${maxRetries - retries + 1}/${maxRetries})`);
+                retries--;
+                lastError = err;
+
+                // Wait a bit before retrying (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, 100 * (maxRetries - retries + 1)));
+                continue;
+            }
+
+            // If not a deadlock or out of retries, throw the error
+            throw err;
+
+        } finally {
+            connection.release();
+        }
+    }
+
+    // If we exhausted all retries, throw the last error
+    throw lastError;
+}
+
+/**
+ * Sleep utility for testing and backoff
+ */
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // --- API ROUTES ---
 
 // Register Endpoint
 app.post('/api/signup', async (req, res) => {
+    // Sanitize all user inputs to prevent XSS attacks
+    const sanitized = sanitizeInput(req.body);
+
     const {
         role, email, password,
         first_name, last_name,
         street, city, state, zip_code,
-        country_id, suggested_country_name, // Updated Fields
+        country_id, suggested_country_name,
         phone
-    } = req.body;
+    } = sanitized;
 
     if (!email || !password || !first_name || !last_name || !role || !country_id || !zip_code) {
         return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const connection = await pool.getConnection();
-
     try {
-        await connection.beginTransaction();
-
-        // 1. Check if email already exists
-        const [existing] = await connection.execute('SELECT user_id FROM AA_USERS WHERE email = ?', [email]);
-        if (existing.length > 0) {
-            throw new Error('Email already registered');
-        }
-
-        // 2. Handle Country
-        let countryIdToUse = country_id;
-
-        // If "Other" (999) is selected, use it and ignore creation logic for now
-        // The admin will review `suggested_country_name` later
-        if (parseInt(country_id) === 999) {
-            // Logic handled below in INSERT
-        } else {
-            // Standard flow: Use existing ID (Validation could go here)
-        }
-
-        /* 
-           Original Auto-create logic removed for Role Separation. 
-           Now we strictly use the ID provided (or 999).
-        */
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        let accountId = null;
-        let producerId = null;
-
-        // 3. Create Entity based on Role
-        if (role === 'VIEWER') {
-            // 3. Insert into AA_VIEWER_ACCOUNT
-            // Note: added suggested_country_name to query
-            const [accountResult] = await connection.execute(
-                `INSERT INTO AA_VIEWER_ACCOUNT 
-                (viewer_email, viewer_first_name, viewer_last_name, viewer_street, viewer_city, viewer_state, viewer_zip_code, viewer_country_id, suggested_country_name, date_opened, monthly_service_charge) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 15.00)`,
-                [email, first_name, last_name, street, city, state, zip_code, countryIdToUse, suggested_country_name || null]
+        await executeWithTransaction(async (connection) => {
+            // 1. Check if email already exists with FOR UPDATE lock
+            // This prevents concurrent signups with the same email
+            const [existing] = await connection.execute(
+                'SELECT user_id FROM AA_USERS WHERE email = ? FOR UPDATE',
+                [email]
             );
-            accountId = accountResult.insertId;
 
-        } else if (role === 'EMPLOYEE') {
-            const [result] = await connection.execute(
-                `INSERT INTO AA_PRODUCER
-                (producer_email, producer_first_name, producer_last_name, producer_street, producer_city, producer_state, producer_zip_code, producer_country_id, producer_phone)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [email, first_name, last_name, street, city, state, zip_code, countryId, phone]
+            if (existing.length > 0) {
+                throw new Error('Email already registered');
+            }
+
+            // 2. Handle Country
+            let countryIdToUse = country_id;
+
+            // If "Other" (999) is selected, use it
+            // The admin will review `suggested_country_name` later
+            if (parseInt(country_id) === 999) {
+                // Logic handled below in INSERT
+            } else {
+                // Standard flow: Use existing ID
+            }
+
+            const hashedPassword = await bcrypt.hash(password, 10);
+            let accountId = null;
+            let producerId = null;
+
+            // 3. Create Entity based on Role
+            if (role === 'VIEWER') {
+                const [accountResult] = await connection.execute(
+                    `INSERT INTO AA_VIEWER_ACCOUNT 
+                    (viewer_email, viewer_first_name, viewer_last_name, viewer_street, viewer_city, viewer_state, viewer_zip_code, viewer_country_id, suggested_country_name, date_opened, monthly_service_charge) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 15.00)`,
+                    [email, first_name, last_name, street, city, state, zip_code, countryIdToUse, suggested_country_name || null]
+                );
+                accountId = accountResult.insertId;
+
+            } else if (role === 'EMPLOYEE') {
+                const [result] = await connection.execute(
+                    `INSERT INTO AA_PRODUCER
+                    (producer_email, producer_first_name, producer_last_name, producer_street, producer_city, producer_state, producer_zip_code, producer_country_id, producer_phone)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [email, first_name, last_name, street, city, state, zip_code, country_id, phone]
+                );
+                producerId = result.insertId;
+
+            } else {
+                throw new Error('Invalid registration role');
+            }
+
+            // 4. Create User Login
+            await connection.execute(
+                `INSERT INTO AA_USERS (email, password_hash, role, account_id, producer_id) 
+                VALUES (?, ?, ?, ?, ?)`,
+                [email, hashedPassword, role, accountId, producerId]
             );
-            producerId = result.insertId;
 
-        } else {
-            throw new Error('Invalid registration role');
-        }
+        }, 'REPEATABLE READ');  // Use REPEATABLE READ isolation level
 
-        // 3. Create User Login
-        await connection.execute(
-            `INSERT INTO AA_USERS (email, password_hash, role, account_id, producer_id) 
-            VALUES (?, ?, ?, ?, ?)`,
-            [email, hashedPassword, role, accountId, producerId]
-        );
-
-        await connection.commit();
         res.status(201).json({ message: 'User registered successfully' });
 
     } catch (err) {
-        await connection.rollback();
         console.error('Signup Error:', err);
         const code = err.message === 'Email already registered' ? 409 : 500;
         res.status(code).json({ error: err.message || 'Internal server error' });
-    } finally {
-        connection.release();
     }
 });
 
@@ -786,43 +878,47 @@ app.get('/api/admin/suggestions', async (req, res) => {
 
 // Admin: Approve Country (Transaction)
 app.post('/api/admin/approve-country', async (req, res) => {
-    const { suggested_name, official_name, official_code } = req.body;
+    // Sanitize country names to prevent XSS
+    const sanitized = sanitizeInput(req.body);
+    const { suggested_name, official_name, official_code } = sanitized;
 
-    const connection = await pool.getConnection();
     try {
-        await connection.beginTransaction();
+        const result = await executeWithTransaction(async (connection) => {
+            // 1. Calculate Next ID with FOR UPDATE lock (Gap Filling Logic)
+            // Lock the max ID row to prevent concurrent ID conflicts
+            const [rows] = await connection.query(
+                'SELECT MAX(country_id) as maxId FROM AA_COUNTRY WHERE country_id < 999 FOR UPDATE'
+            );
+            const nextId = (rows[0].maxId || 0) + 1;
 
-        // 1. Calculate Next ID (Gap Filling Logic)
-        // Find max ID excluding the special 999 ID
-        const [rows] = await connection.query('SELECT MAX(country_id) as maxId FROM AA_COUNTRY WHERE country_id < 999');
-        const nextId = (rows[0].maxId || 0) + 1;
+            // 2. Create Official Country with explicit ID
+            await connection.execute(
+                'INSERT INTO AA_COUNTRY (country_id, country_name, country_code_iso) VALUES (?, ?, ?)',
+                [nextId, official_name, official_code]
+            );
 
-        // 2. Create Official Country with explicit ID
-        await connection.execute(
-            'INSERT INTO AA_COUNTRY (country_id, country_name, country_code_iso) VALUES (?, ?, ?)',
-            [nextId, official_name, official_code]
-        );
+            // 3. Update Users who suggested this name
+            const [updateRes] = await connection.execute(
+                `UPDATE AA_VIEWER_ACCOUNT 
+                 SET viewer_country_id = ?, suggested_country_name = NULL 
+                 WHERE viewer_country_id = 999 AND suggested_country_name = ?`,
+                [nextId, suggested_name]
+            );
 
-        // 3. Update Users who suggested this name
-        const [updateRes] = await connection.execute(
-            `UPDATE AA_VIEWER_ACCOUNT 
-             SET viewer_country_id = ?, suggested_country_name = NULL 
-             WHERE viewer_country_id = 999 AND suggested_country_name = ?`,
-            [nextId, suggested_name]
-        );
+            return {
+                newCountryId: nextId,
+                usersUpdated: updateRes.affectedRows
+            };
 
-        await connection.commit();
+        }, 'SERIALIZABLE');  // Use SERIALIZABLE for maximum isolation
+
         res.json({
             message: 'Country Approved',
-            newCountryId: nextId,
-            usersUpdated: updateRes.affectedRows
+            ...result
         });
 
     } catch (err) {
-        await connection.rollback();
         res.status(500).json({ error: err.message });
-    } finally {
-        connection.release();
     }
 });
 
@@ -894,10 +990,20 @@ app.put('/api/admin/viewers/:accountId/charge', async (req, res) => {
     }
 
     try {
-        await pool.execute(
-            'UPDATE AA_VIEWER_ACCOUNT SET monthly_service_charge = ? WHERE account_id = ?',
-            [monthly_service_charge, accountId]
-        );
+        await executeWithTransaction(async (connection) => {
+            // Lock the account row to prevent concurrent updates
+            await connection.execute(
+                'SELECT account_id FROM AA_VIEWER_ACCOUNT WHERE account_id = ? FOR UPDATE',
+                [accountId]
+            );
+
+            // Update the charge
+            await connection.execute(
+                'UPDATE AA_VIEWER_ACCOUNT SET monthly_service_charge = ? WHERE account_id = ?',
+                [monthly_service_charge, accountId]
+            );
+        }, 'REPEATABLE READ');
+
         res.json({ message: 'Service charge updated' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -985,7 +1091,9 @@ app.get('/api/admin/production-houses/:id', async (req, res) => {
 
 // Add Production House
 app.post('/api/admin/production-houses', async (req, res) => {
-    const { ph_name, ph_street, ph_city, ph_state, ph_zip_code, ph_country_id, year_established } = req.body;
+    // Sanitize production house data to prevent XSS
+    const sanitized = sanitizeInput(req.body);
+    const { ph_name, ph_street, ph_city, ph_state, ph_zip_code, ph_country_id, year_established } = sanitized;
 
     try {
         const [result] = await pool.execute(
@@ -1003,7 +1111,9 @@ app.post('/api/admin/production-houses', async (req, res) => {
 // Update Production House
 app.put('/api/admin/production-houses/:id', async (req, res) => {
     const { id } = req.params;
-    const { ph_name, ph_street, ph_city, ph_state, ph_zip_code, ph_country_id, year_established } = req.body;
+    // Sanitize production house data to prevent XSS
+    const sanitized = sanitizeInput(req.body);
+    const { ph_name, ph_street, ph_city, ph_state, ph_zip_code, ph_country_id, year_established } = sanitized;
 
     try {
         await pool.execute(
