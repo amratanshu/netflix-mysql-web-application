@@ -1,0 +1,37 @@
+{
+  "timestamp": "2025-12-10T07:20:04.237Z",
+  "results": [
+    {
+      "description": "User Login (Email Lookup)",
+      "duration": 1,
+      "rowsReturned": 1,
+      "rowsExamined": "1",
+      "type": "const",
+      "keyUsed": "email"
+    },
+    {
+      "description": "Production House Search",
+      "duration": 1,
+      "rowsReturned": 0,
+      "rowsExamined": "10",
+      "type": "ALL",
+      "keyUsed": "NONE"
+    },
+    {
+      "description": "Series by Production House",
+      "duration": 5,
+      "rowsReturned": 1,
+      "rowsExamined": "1",
+      "type": "ref",
+      "keyUsed": "fk_aa_ws_ph"
+    },
+    {
+      "description": "View History by Account",
+      "duration": 1,
+      "rowsReturned": 8,
+      "rowsExamined": "8",
+      "type": "ref",
+      "keyUsed": "fk_aa_vh_acct"
+    }
+  ]
+}
